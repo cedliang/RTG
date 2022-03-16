@@ -47,6 +47,9 @@ class AutoTrader(BaseAutoTrader):
         self.asks = set()
         self.ask_id = self.ask_price = self.bid_id = self.bid_price = self.position = 0
 
+        self.upper_diff = {}
+        self.lower_diff = {}
+
     def on_error_message(self, client_order_id: int, error_message: bytes) -> None:
         """Called when the exchange detects an error.
 
@@ -156,25 +159,30 @@ class AutoTrader(BaseAutoTrader):
                     else:
                         break
 
-            new_sell_price = lowest_etf_sellprice - TICK_SIZE_IN_CENTS
-            new_buy_price = highest_etf_buyprice + TICK_SIZE_IN_CENTS
+            else:
+                new_sell_price = lowest_etf_sellprice - TICK_SIZE_IN_CENTS
+                new_buy_price = highest_etf_buyprice + TICK_SIZE_IN_CENTS
 
-            if diffToLimSell > 0 and new_sell_price > lowest_fut_sellprice:
+                sellgap = new_sell_price - lowest_fut_sellprice
+                buygap = highest_fut_buyprice - new_buy_price
 
-                self.ask_id = next(self.order_ids)
-                self.asks.add(self.ask_id)
-                self.ask_price = new_sell_price
+                if (diffToLimSell > 0 and sellgap > buygap and sellgap >= 100) or (buygap == sellgap and buygap >= 100 and diffToLimSell > diffToLimBuy):
 
-                self.send_insert_order(
-                    self.ask_id, Side.SELL, new_sell_price, diffToLimSell, Lifespan.G)
+                    self.ask_id = next(self.order_ids)
+                    self.asks.add(self.ask_id)
+                    self.ask_price = new_sell_price
 
-            if diffToLimBuy > 0 and new_buy_price < highest_fut_buyprice:
-                self.bid_id = next(self.order_ids)
-                self.bids.add(self.bid_id)
-                self.bid_price = new_buy_price
+                    self.send_insert_order(
+                        self.ask_id, Side.SELL, new_sell_price, diffToLimSell, Lifespan.G)
 
-                self.send_insert_order(
-                    self.bid_id, Side.BUY, new_buy_price, diffToLimBuy, Lifespan.G)
+                elif (diffToLimBuy > 0 and buygap > sellgap and buygap >= 100)  or (buygap == sellgap and buygap >= 100 and diffToLimSell <= diffToLimBuy):
+
+                    self.bid_id = next(self.order_ids)
+                    self.bids.add(self.bid_id)
+                    self.bid_price = new_buy_price
+
+                    self.send_insert_order(
+                        self.bid_id, Side.BUY, new_buy_price, diffToLimBuy, Lifespan.G)
 
         # self.logger.info("received order book for instrument %d with sequence number %d", instrument,
         #                  sequence_number)
