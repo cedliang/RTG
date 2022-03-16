@@ -67,8 +67,8 @@ class AutoTrader(BaseAutoTrader):
 
         If the order was unsuccessful, both the price and volume will be zero.
         """
-        self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id,
-                         price, volume)
+        # self.logger.info("received hedge filled for order %d with average price %d and volume %d", client_order_id,
+        #                  price, volume)
 
     def on_order_book_update_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                      ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -84,66 +84,100 @@ class AutoTrader(BaseAutoTrader):
 
             self.futures_args = {"ask_prices": ask_prices, "ask_volumes": ask_volumes,
                                  "bid_prices": bid_prices, "bid_volumes": bid_volumes}
+            if self.ask_id != 0:
+                self.send_cancel_order(self.ask_id)
+                self.ask_id = 0
+
+            if self.bid_id != 0:
+                self.send_cancel_order(self.bid_id)
+                self.bid_id = 0
 
         else:
 
             # note - if case 1 is occurring, then case 2 CANNOT occur. this way, can do it with if else statements to minimise computation.
 
-            # case 1: lowest futures sell order price < highest etf buy order price
+            # overlap case 1: lowest futures sell order price < highest etf buy order price
 
             highest_etf_buyprice = bid_prices[0]
             lowest_fut_sellprice = self.futures_args["ask_prices"][0]
 
+            lowest_etf_sellprice = ask_prices[0]
+            highest_fut_buyprice = self.futures_args["bid_prices"][0]
+
+            diffToLimSell = self.position - (-1 * POSITION_LIMIT)
+            diffToLimBuy = POSITION_LIMIT - self.position
+
             if highest_etf_buyprice > lowest_fut_sellprice:
 
                 total_overlap_vol = 0
-                diffToLim = self.position - (-1 * POSITION_LIMIT)
+
                 remaining_lowest_fut_sellvol = self.futures_args["ask_volumes"][0]
 
                 for i in range(5):
-                    if bid_prices[i] > lowest_fut_sellprice and total_overlap_vol < diffToLim and remaining_lowest_fut_sellvol > 0:
+                    if bid_prices[i] > lowest_fut_sellprice and total_overlap_vol < diffToLimSell and remaining_lowest_fut_sellvol > 0:
 
-                        possible_vol = diffToLim - total_overlap_vol
+                        possible_vol = diffToLimSell - total_overlap_vol
 
-                        sell_price = bid_prices[i]
-                        sell_volume = min(bid_volumes[i], possible_vol, remaining_lowest_fut_sellvol)
-                        
+                        new_sell_price = bid_prices[i]
+                        sell_volume = min(
+                            bid_volumes[i], possible_vol, remaining_lowest_fut_sellvol)
 
-                        self.send_insert_order((ask_id := next(self.order_ids)), Side.SELL, sell_price, sell_volume, Lifespan.FAK)
+                        self.send_insert_order((ask_id := next(
+                            self.order_ids)), Side.SELL, new_sell_price, sell_volume, Lifespan.FAK)
                         self.asks.add(ask_id)
                         remaining_lowest_fut_sellvol -= sell_volume
                         total_overlap_vol += sell_volume
+                        diffToLimSell -= sell_volume
                     else:
                         break
 
-            # case 2
-            else:
-                lowest_etf_sellprice = ask_prices[0]
-                highest_fut_buyprice = self.futures_args["bid_prices"][0]
-                if lowest_etf_sellprice < highest_fut_buyprice:
-                    total_overlap_vol = 0
-                    diffToLim = POSITION_LIMIT - self.position
-                    remaining_highest_fut_buyvol = self.futures_args["bid_volumes"][0]
-                    for i in range(5):
-                        if ask_prices[i] < highest_fut_buyprice and total_overlap_vol < diffToLim and remaining_highest_fut_buyvol > 0:
-                            possible_vol = diffToLim - total_overlap_vol
+            # overlap case 2: highest futures buy price > lowest etc sell order price
+            elif lowest_etf_sellprice < highest_fut_buyprice:
 
-                            buy_price = ask_prices[i]
-                            buy_volume = min(ask_volumes[i], possible_vol, remaining_highest_fut_buyvol)
+                total_overlap_vol = 0
 
-                            self.send_insert_order((bid_id := next(self.order_ids)), Side.BUY, buy_price, buy_volume, Lifespan.FAK)
-                            self.bids.add(bid_id)
-                            remaining_highest_fut_buyvol -= buy_volume
-                            total_overlap_vol += buy_volume
+                remaining_highest_fut_buyvol = self.futures_args["bid_volumes"][0]
 
-                        else:
-                            break
+                for i in range(5):
+                    if ask_prices[i] < highest_fut_buyprice and total_overlap_vol < diffToLimBuy and remaining_highest_fut_buyvol > 0:
+                        possible_vol = diffToLimBuy - total_overlap_vol
 
+                        buy_price = ask_prices[i]
+                        buy_volume = min(
+                            ask_volumes[i], possible_vol, remaining_highest_fut_buyvol)
 
-        self.logger.info("received order book for instrument %d with sequence number %d", instrument,
-                         sequence_number)
+                        self.send_insert_order(
+                            (ask_id := next(self.order_ids)), Side.BUY, buy_price, buy_volume, Lifespan.FAK)
+                        self.bids.add(ask_id)
+                        remaining_highest_fut_buyvol -= buy_volume
+                        total_overlap_vol += buy_volume
+                        diffToLimBuy -= buy_volume
 
+                    else:
+                        break
 
+            new_sell_price = lowest_etf_sellprice - TICK_SIZE_IN_CENTS
+            new_buy_price = highest_etf_buyprice + TICK_SIZE_IN_CENTS
+
+            if diffToLimSell > 0 and new_sell_price > lowest_fut_sellprice:
+
+                self.ask_id = next(self.order_ids)
+                self.asks.add(self.ask_id)
+                self.ask_price = new_sell_price
+
+                self.send_insert_order(
+                    self.ask_id, Side.SELL, new_sell_price, diffToLimSell, Lifespan.G)
+
+            if diffToLimBuy > 0 and new_buy_price < highest_fut_buyprice:
+                self.bid_id = next(self.order_ids)
+                self.bids.add(self.bid_id)
+                self.bid_price = new_buy_price
+
+                self.send_insert_order(
+                    self.bid_id, Side.BUY, new_buy_price, diffToLimBuy, Lifespan.G)
+
+        # self.logger.info("received order book for instrument %d with sequence number %d", instrument,
+        #                  sequence_number)
 
     def on_order_filled_message(self, client_order_id: int, price: int, volume: int) -> None:
         """Called when when of your orders is filled, partially or fully.
@@ -152,8 +186,6 @@ class AutoTrader(BaseAutoTrader):
         which may be better than the order's limit price. The volume is
         the number of lots filled at that price.
         """
-        self.logger.info("received order filled for order %d with price %d and volume %d", client_order_id,
-                         price, volume)
 
         if client_order_id in self.asks:
             self.position -= volume
@@ -168,6 +200,9 @@ class AutoTrader(BaseAutoTrader):
             self.send_hedge_order(next(self.order_ids),
                                   Side.ASK, MINIMUM_BID, volume)
 
+        # self.logger.info("received order filled for order %d with price %d and volume %d", client_order_id,
+        #                  price, volume)
+
     def on_order_status_message(self, client_order_id: int, fill_volume: int, remaining_volume: int,
                                 fees: int) -> None:
         """Called when the status of one of your orders changes.
@@ -179,8 +214,7 @@ class AutoTrader(BaseAutoTrader):
 
         If an order is cancelled its remaining volume will be zero.
         """
-        self.logger.info("received order status for order %d with fill volume %d remaining %d and fees %d",
-                         client_order_id, fill_volume, remaining_volume, fees)
+
         if remaining_volume == 0:
             if client_order_id == self.bid_id:
                 self.bid_id = 0
@@ -190,6 +224,9 @@ class AutoTrader(BaseAutoTrader):
             # It could be either a bid or an ask
             self.bids.discard(client_order_id)
             self.asks.discard(client_order_id)
+
+        # self.logger.info("received order status for order %d with fill volume %d remaining %d and fees %d",
+        #                  client_order_id, fill_volume, remaining_volume, fees)
 
     def on_trade_ticks_message(self, instrument: int, sequence_number: int, ask_prices: List[int],
                                ask_volumes: List[int], bid_prices: List[int], bid_volumes: List[int]) -> None:
@@ -202,5 +239,5 @@ class AutoTrader(BaseAutoTrader):
         If there are less than five prices on a side, then zeros will appear at
         the end of both the prices and volumes arrays.
         """
-        self.logger.info("received trade ticks for instrument %d with sequence number %d", instrument,
-                         sequence_number)
+        # self.logger.info("received trade ticks for instrument %d with sequence number %d", instrument,
+        #                  sequence_number)
