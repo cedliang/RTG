@@ -110,6 +110,14 @@ class AutoTrader(BaseAutoTrader):
             diffToLimSell = self.position - (-1 * POSITION_LIMIT)
             diffToLimBuy = POSITION_LIMIT - self.position
 
+            fut_midpoint_price = (highest_fut_buyprice +
+                                  lowest_fut_sellprice)/2
+
+            # etf midpoint
+            etf_midpoint_price = (highest_etf_buyprice +
+                                  lowest_etf_sellprice)/2
+
+
             if highest_etf_buyprice > lowest_fut_sellprice:
 
                 total_overlap_vol = 0
@@ -166,7 +174,7 @@ class AutoTrader(BaseAutoTrader):
                 sellgap = new_sell_price - lowest_fut_sellprice
                 buygap = highest_fut_buyprice - new_buy_price
 
-                if (diffToLimSell > 0 and sellgap > buygap and sellgap >= 100) or (buygap == sellgap and buygap >= 100 and diffToLimSell > diffToLimBuy):
+                if (diffToLimSell > 0 and sellgap > buygap and sellgap >= 100) or (buygap == sellgap and buygap >= 100 and etf_midpoint_price > fut_midpoint_price):
 
                     self.ask_id = next(self.order_ids)
                     self.asks.add(self.ask_id)
@@ -175,7 +183,7 @@ class AutoTrader(BaseAutoTrader):
                     self.send_insert_order(
                         self.ask_id, Side.SELL, new_sell_price, diffToLimSell, Lifespan.G)
 
-                elif (diffToLimBuy > 0 and buygap > sellgap and buygap >= 100)  or (buygap == sellgap and buygap >= 100 and diffToLimSell <= diffToLimBuy):
+                elif (diffToLimBuy > 0 and buygap > sellgap and buygap >= 100) or (buygap == sellgap and buygap >= 100 and etf_midpoint_price < fut_midpoint_price):
 
                     self.bid_id = next(self.order_ids)
                     self.bids.add(self.bid_id)
