@@ -125,24 +125,25 @@ class AutoTrader(BaseAutoTrader):
                 remaining_lowest_fut_sellvol = self.futures_args["ask_volumes"][0]
 
                 for i in range(5):
-                    if bid_prices[i] > lowest_fut_sellprice and total_overlap_vol < diffToLimSell and remaining_lowest_fut_sellvol > 0:
-
-                        possible_vol = diffToLimSell - total_overlap_vol
-
-                        new_sell_price = bid_prices[i]
-                        sell_volume = min(
-                            bid_volumes[i], possible_vol, remaining_lowest_fut_sellvol)
-
-                        self.send_insert_order((ask_id := next(
-                            self.order_ids)), Side.SELL, new_sell_price, sell_volume, Lifespan.FAK)
-                        self.asks.add(ask_id)
-                        remaining_lowest_fut_sellvol -= sell_volume
-                        total_overlap_vol += sell_volume
-                        diffToLimSell -= sell_volume
-                    else:
+                    if (
+                        bid_prices[i] <= lowest_fut_sellprice
+                        or total_overlap_vol >= diffToLimSell
+                        or remaining_lowest_fut_sellvol <= 0
+                    ):
                         break
 
-            # overlap case 2: highest futures buy price > lowest etc sell order price
+                    possible_vol = diffToLimSell - total_overlap_vol
+
+                    new_sell_price = bid_prices[i]
+                    sell_volume = min(
+                        bid_volumes[i], possible_vol, remaining_lowest_fut_sellvol)
+
+                    self.send_insert_order((ask_id := next(
+                        self.order_ids)), Side.SELL, new_sell_price, sell_volume, Lifespan.FAK)
+                    self.asks.add(ask_id)
+                    remaining_lowest_fut_sellvol -= sell_volume
+                    total_overlap_vol += sell_volume
+                    diffToLimSell -= sell_volume
             elif lowest_etf_sellprice < highest_fut_buyprice:
 
                 total_overlap_vol = 0
@@ -150,22 +151,25 @@ class AutoTrader(BaseAutoTrader):
                 remaining_highest_fut_buyvol = self.futures_args["bid_volumes"][0]
 
                 for i in range(5):
-                    if ask_prices[i] < highest_fut_buyprice and total_overlap_vol < diffToLimBuy and remaining_highest_fut_buyvol > 0:
-                        possible_vol = diffToLimBuy - total_overlap_vol
-
-                        buy_price = ask_prices[i]
-                        buy_volume = min(
-                            ask_volumes[i], possible_vol, remaining_highest_fut_buyvol)
-
-                        self.send_insert_order(
-                            (ask_id := next(self.order_ids)), Side.BUY, buy_price, buy_volume, Lifespan.FAK)
-                        self.bids.add(ask_id)
-                        remaining_highest_fut_buyvol -= buy_volume
-                        total_overlap_vol += buy_volume
-                        diffToLimBuy -= buy_volume
-
-                    else:
+                    if (
+                        ask_prices[i] >= highest_fut_buyprice
+                        or total_overlap_vol >= diffToLimBuy
+                        or remaining_highest_fut_buyvol <= 0
+                    ):
                         break
+
+                    possible_vol = diffToLimBuy - total_overlap_vol
+
+                    buy_price = ask_prices[i]
+                    buy_volume = min(
+                        ask_volumes[i], possible_vol, remaining_highest_fut_buyvol)
+
+                    self.send_insert_order(
+                        (ask_id := next(self.order_ids)), Side.BUY, buy_price, buy_volume, Lifespan.FAK)
+                    self.bids.add(ask_id)
+                    remaining_highest_fut_buyvol -= buy_volume
+                    total_overlap_vol += buy_volume
+                    diffToLimBuy -= buy_volume
 
             else:
                 new_sell_price = lowest_etf_sellprice - TICK_SIZE_IN_CENTS
